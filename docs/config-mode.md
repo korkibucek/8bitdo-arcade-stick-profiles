@@ -6,49 +6,63 @@ do.
 
 ## The short version
 
-`stickctl` talks to the stick through a special USB interface that appears as
+`stickctl` talks to the stick through a USB interface that appears as
 `VID_2DC8&PID_901A`. That interface only exists while the stick is in **8BitDo config
-mode**. The Ultimate Software is what puts the stick into that mode.
+mode**. Otherwise the stick is a gaming controller and the interface is gone.
 
-When the Ultimate Software is **not** running, the stick reverts to its normal gaming
-identity — in X-input mode that's a plain **Xbox 360 controller** (`VID_045E&PID_028E`)
-— and the config interface disappears. An Xbox-mode controller accepts no output
-reports, so nothing in user space (not stickctl, not the tray) can flip it back.
-
-**Fix today:** launch the 8BitDo Ultimate Software once. It flips the stick into
-config mode, the `2dc8:901a` interface re-appears, and stickctl + the tray work. The
-app can sit **minimized** — you never need to touch its UI; keep using the tray and
-hotkeys. Check the state any time with:
+**stickctl now enters config mode by itself**, emulating exactly what the Ultimate
+Software does — *as long as the stick's mode switch is on `S` (Switch mode)*. Slide the
+switch to **S**, plug in USB, and `stick switch` / the tray just work; the mode jump
+happens automatically. You can also do it explicitly:
 
 ```bash
-stick state
+stick wake      # flip Switch-mode -> config mode
+stick state     # show the current mode
 ```
+
+The one mode we **cannot** wake from is **X (Xbox) mode**: that interface
+(`045e:028e`) accepts no output reports at all, so there's no channel to send the jump.
+On `S`, the stick impersonates a Switch Pro Controller (`057e:2009`), which *does*
+accept the vendor command — that's the door the app uses too.
+
+If you keep the switch on `X` for gaming, the fallback is still: launch the Ultimate
+Software once (minimized) to establish config mode.
 
 ## The detail
 
 8BitDo sticks have several USB "personalities":
 
-| Physical / software state | USB identity | Writable config interface? |
-|---|---|---|
-| X-input gaming (app closed) | `045e:028e` Xbox 360 pad | no (input-only) |
-| Switch gaming (app closed) | Switch Pro pad | no via this tool yet |
-| **Config mode (app running)** | **`2dc8:901a`** | **yes — this is what stickctl uses** |
+| Mode switch | USB identity | Writable? | Config-mode reachable? |
+|---|---|---|---|
+| X (Xbox) | `045e:028e` Xbox 360 pad | no (input-only) | only via the Ultimate Software |
+| S (Switch) | `057e:2009` Switch Pro pad | **yes** | **yes — `stick wake` jumps it** |
+| (after jump) | `2dc8:901a` config | yes | this is what stickctl uses |
 
-We verified on this hardware that the Xbox-mode interface (`045e:028e`) rejects every
-output and feature report (`write -> -1`), so the documented "jump to config mode"
-command can't be delivered from X-input mode. The official app establishes config mode
-through a channel that isn't reachable once the stick has settled into pure Xbox-input
-mode.
+## How the mechanism was reverse-engineered
 
-## Fully app-free operation (possible future work)
+`8BitDoAdvance.dll` uses only the Windows HID API (`HidD_*`), and its **only**
+mode-jump code is the exports `findSwitch` / `writeSwitch`:
 
-The [8bitdo-spec SwitchMode notes](https://github.com/TheJayMann/8bitdo-spec) describe
-a command (`01 66 AA 00 51 01`) that flips the stick from **Switch mode** into the
-8BitDo/config identity. Unlike Xbox mode, a Switch-Pro HID device *does* accept output
-reports, so a `stick wake` command that works when the mode switch is on **S** is
-plausible — it just needs testing on the hardware. That would let stickctl enter config
-mode itself without the Ultimate Software. It's not implemented yet; see the
-[project notes](../stickctl/README.md).
+- `findSwitch` enumerates HID for **`057e:2009`** — a Nintendo Switch Pro Controller,
+  i.e. the stick in `S` mode.
+- `writeSwitch` opens that device and does a 64-byte HID write then a 64-byte read
+  (twice), sending the 8BitDo vendor command.
 
-Until then: keep the Ultimate Software running (minimized) when you want to switch
-profiles with stickctl or the tray.
+The command bytes (from the [8bitdo-spec SwitchMode notes](https://github.com/TheJayMann/8bitdo-spec),
+matching the DLL's transport):
+
+```
+version request : 01 66 AA 00 21 01   -> reply 81 66 A5 <pid-be> ...
+jump to config  : 01 66 AA 00 51 01   -> re-enumerates as 2dc8:901a
+exit to Switch  : 81 05 00 51 04       (sent to the 2dc8:901a device)
+```
+
+There is **no** equivalent finder/writer for the Xbox interface anywhere in the DLL,
+and we confirmed on hardware that `045e:028e` rejects every output and feature report
+(`write -> -1`). So config mode is fundamentally a **Switch-mode** operation — which is
+exactly what `stick wake` reproduces (see `wake()` in
+[`stickctl.py`](../stickctl/stickctl.py)).
+
+`stick selftest-wake` proves the whole cycle without touching the physical switch
+(config → exit-to-Switch → wake → config, verifying the profile survives). Run it with
+the Ultimate Software closed.

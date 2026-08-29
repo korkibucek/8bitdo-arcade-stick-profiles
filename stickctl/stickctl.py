@@ -24,10 +24,17 @@ import hashlib
 import json
 import os
 import sys
+import time
 
 import hid
 
 VID, PID = 0x2DC8, 0x901A
+# Switch-mode identity (Nintendo Pro Controller impersonation) + vendor commands
+# that flip the stick into config mode. Reverse-engineered from findSwitch/
+# writeSwitch in 8BitDoAdvance.dll; see docs/config-mode.md.
+SWITCH_VID, SWITCH_PID = 0x057E, 0x2009
+CMD_VERSION = bytes([0x01, 0x66, 0xAA, 0x00, 0x21, 0x01])
+CMD_JUMP_CONFIG = bytes([0x01, 0x66, 0xAA, 0x00, 0x51, 0x01])
 CONFIG_SIZE = 0x234          # 564 bytes (confirmed: _writeArcadeStick@564)
 CHUNK = 0x2D                 # 45 bytes max per transfer
 CMD_READ = 0x0C
@@ -58,18 +65,55 @@ class StickNotInConfigMode(SystemExit):
 
 def stick_state():
     """Return 'config' (2dc8:901a present), 'xbox' (X-input gaming mode),
-    'switch' (Switch gaming mode), or 'absent'."""
+    'switch' (Switch gaming mode, wake-able), or 'absent'."""
     if hid.enumerate(VID, PID):
         return "config"
+    if hid.enumerate(SWITCH_VID, SWITCH_PID):
+        return "switch"
     if hid.enumerate(0x045E, 0x028E):
         return "xbox"
-    if hid.enumerate(0x057E, 0) or hid.enumerate(0x2DC8, 0x9018):
-        return "switch"
     return "absent"
 
 
-def open_stick():
+def wake(verbose=True):
+    """Flip the stick from Switch mode into config mode, exactly as the
+    Ultimate Software's writeSwitch() does: open the 057e:2009 Pro-Controller
+    interface and send the 8BitDo vendor jump command. Returns True if the
+    config interface (2dc8:901a) appears afterwards.
+    """
+    if hid.enumerate(VID, PID):
+        return True  # already in config mode
+    devs = hid.enumerate(SWITCH_VID, SWITCH_PID)
+    if not devs:
+        return False
+    h = hid.device()
+    h.open_path(devs[0]["path"])
+    try:
+        # version request first (confirms it's an 8BitDo, mirrors the app)
+        for _ in range(2):
+            h.write(CMD_VERSION + b"\x00" * 58)
+            r = bytes(h.read(64, 300))
+            if verbose and r:
+                print(f"  switch-mode reply: {r[:8].hex(' ')}")
+        h.write(CMD_JUMP_CONFIG + b"\x00" * 58)
+    finally:
+        try:
+            h.close()
+        except Exception:
+            pass
+    # the device re-enumerates; wait for the config interface to appear
+    for _ in range(20):
+        time.sleep(0.4)
+        if hid.enumerate(VID, PID):
+            return True
+    return False
+
+
+def open_stick(auto_wake=True):
     devs = hid.enumerate(VID, PID)
+    if not devs and auto_wake and hid.enumerate(SWITCH_VID, SWITCH_PID):
+        wake(verbose=False)                    # emulate the app's mode jump
+        devs = hid.enumerate(VID, PID)
     if devs:
         h = hid.device()
         h.open_path(devs[0]["path"])
@@ -78,18 +122,13 @@ def open_stick():
     state = stick_state()
     if state == "xbox":
         raise StickNotInConfigMode(
-            "The stick is connected but in Xbox gaming mode, not config mode.\n"
-            "stickctl can only reach it while it's in 8BitDo config mode, which the\n"
-            "Ultimate Software puts it into. Fix: launch the 8BitDo Ultimate Software\n"
-            "(it can stay minimized) - the stick will re-appear as 2dc8:901a and\n"
-            "stickctl/tray will work. See docs/config-mode.md for why.")
-    if state == "switch":
-        raise StickNotInConfigMode(
-            "The stick is in Switch gaming mode. Set the mode switch to X and open\n"
-            "the 8BitDo Ultimate Software once so it enters config mode.")
+            "The stick is in Xbox (X-input) mode, which has no writable channel to\n"
+            "enter config mode. Slide the mode switch to S (Switch mode) and retry -\n"
+            "stickctl will then flip it into config mode automatically. See\n"
+            "docs/config-mode.md.")
     raise StickNotInConfigMode(
-        "Arcade Stick not found. Plug it in by USB cable, and open the 8BitDo\n"
-        "Ultimate Software once so it enters config mode (see docs/config-mode.md).")
+        "Arcade Stick not found. Plug it in by USB cable (mode switch on S so\n"
+        "stickctl can enter config mode automatically). See docs/config-mode.md.")
 
 
 def _frame(cmd, offset, size, data=b""):
@@ -407,11 +446,80 @@ def cmd_state(args):
     s = stick_state()
     msg = {
         "config": "config mode (2dc8:901a) - ready. stickctl can read/write.",
-        "xbox": "Xbox gaming mode (045e:028e) - NOT reachable. Open Ultimate Software to enter config mode.",
-        "switch": "Switch gaming mode - NOT reachable. Set switch to X + open Ultimate Software.",
+        "switch": "Switch mode (057e:2009) - run 'stick wake' (or just switch); it enters config mode automatically.",
+        "xbox": "Xbox mode (045e:028e) - no writable channel. Slide mode switch to S to make it wake-able.",
         "absent": "not detected. Plug in by USB.",
     }[s]
     print(f"stick state: {msg}")
+
+
+def to_switch_mode(h):
+    """Emulate the app's swExitDinput: tell the config device to drop back to
+    Switch gaming mode. The 2dc8:901a interface disappears afterwards."""
+    body = bytes([0x81, 0x05, 0x00, 0x51, 0x04])
+    h.write(body + b"\x00" * (64 - len(body)))
+
+
+def cmd_selftest_wake(args):
+    """End-to-end proof of the mode emulation, no physical switch needed:
+    config -> (exit to Switch) -> Switch -> (wake) -> config, verifying the
+    config survives. Only run with the Ultimate Software closed."""
+    if any("8bitdo" in (p or "").lower() for p in _running_processes()):
+        raise SystemExit("Close the 8BitDo Ultimate Software first (it fights for the device).")
+    if stick_state() != "config":
+        raise SystemExit(f"need to start in config mode; current state: {stick_state()}")
+    h = open_stick(auto_wake=False)
+    before = read_config(h)
+    name = profile_name(before)
+    print(f"start: config mode, profile {name!r}")
+    print("sending exit-to-Switch...")
+    to_switch_mode(h)
+    try:
+        h.close()
+    except Exception:
+        pass
+    for _ in range(20):
+        time.sleep(0.4)
+        if hid.enumerate(SWITCH_VID, SWITCH_PID):
+            break
+    if not hid.enumerate(SWITCH_VID, SWITCH_PID):
+        raise SystemExit("stick did not drop to Switch mode; state=" + stick_state())
+    print(f"now in Switch mode ({SWITCH_VID:04x}:{SWITCH_PID:04x}). Running wake()...")
+    if not wake():
+        raise SystemExit("wake() failed - stick is in Switch mode; replug or open the app to recover.")
+    h2 = open_stick(auto_wake=False)
+    after = read_config(h2)
+    if same_config(after, before):
+        print(f"PASS: full config<->Switch<->config cycle works; profile {name!r} intact.")
+    else:
+        print("config differs after cycle; investigate (stick still functional).")
+
+
+def _running_processes():
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["tasklist", "/fo", "csv", "/nh"], text=True, stderr=subprocess.DEVNULL)
+        return [line.split(",")[0].strip('"') for line in out.splitlines()]
+    except Exception:
+        return []
+
+
+def cmd_wake(args):
+    s = stick_state()
+    if s == "config":
+        print("already in config mode.")
+        return
+    if s == "switch":
+        print("flipping stick from Switch mode into config mode...")
+        if wake():
+            print("config mode entered (2dc8:901a present).")
+        else:
+            print("wake sent but config interface did not appear; try 'stick state'.")
+        return
+    if s == "xbox":
+        raise SystemExit("stick is in Xbox mode - slide the mode switch to S, then 'stick wake'.")
+    raise SystemExit("stick not detected on USB.")
 
 
 def cmd_current(args):
@@ -479,7 +587,7 @@ COMMANDS = {
     "capture": cmd_capture, "list": cmd_list, "switch": cmd_switch,
     "current": cmd_current, "read": cmd_read, "decode": cmd_decode,
     "apply": cmd_apply, "roundtrip": cmd_roundtrip, "compile": cmd_compile,
-    "state": cmd_state,
+    "state": cmd_state, "wake": cmd_wake, "selftest-wake": cmd_selftest_wake,
 }
 
 
