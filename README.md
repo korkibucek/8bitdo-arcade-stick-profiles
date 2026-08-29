@@ -24,7 +24,7 @@ the ★ button stays mapped to **Turbo**, and Home stays as the mode/home button
 | `Analogue Duo.ini` | Analogue Duo | Identity, stick-click (L3/R3) disabled; A/B act as II/I |
 | `Analogue 64.ini` | Analogue 64 | Identity — flip the lever switch to left-analog for the N64 stick |
 | `PS2.ini` | PlayStation 2 (via adapter) | Identity — A B X Y → Cross Circle Square Triangle |
-| `PS3.ini` | PlayStation 3 (via adapter) | Identity |
+| `PS3.ini` | PlayStation 3 (Bluetooth) | Remapped for the PS3's index-based HID reading — see below |
 | `Xbox Series X.ini` | Xbox Series X (via adapter) | Identity — native Xbox layout |
 | `Steam.ini`, `MAME.ini`, `PCE.ini` | PC | Original PC profiles, included for completeness |
 
@@ -84,9 +84,31 @@ classic grid: A·B on the bottom, C·D on top.
 
 ![Neo-Geo layout](docs/images/layout-neogeo.svg)
 
+### PS3 over Bluetooth
+
+The PS3 pairs with the stick as a *generic* HID gamepad and ignores button names — it
+reads buttons purely by report index, expecting the standard "PC/PS3" stick order:
+`1 Square · 2 Cross · 3 Circle · 4 Triangle · 5 L1 · 6 R1 · 7 L2 · 8 R2 · 9 Select · 10 Start`.
+
+The stick in X-input mode reports Xbox order (`A B X Y L R Select Start L3 L3/R3`, with the
+triggers as axes the PS3 can't see). Left unmapped, that scrambles everything — physical
+Start comes out as R2 and the P2 macro button becomes Start. So this profile remaps outputs
+to land on the right indices:
+
+| Physical | Output sent | PS3 sees |
+|---|---|---|
+| Top row X · Y · R · L | A · Y · R · L | Square · Triangle · R1 · L1 |
+| Bottom row A · B · R2 · L2 | B · X · START · SELECT | Cross · Circle · R2 · L2 |
+| Select / Start | L3 / R3 | Select / Start |
+| P1 / P2 | L3 / R3 (default) | Select / Start (bonus duplicates) |
+
+That gives the classic PS3 fight-game default: LP·MP·HP on Square·Triangle·R1 across the
+top, LK·MK·HK on Cross·Circle·R2 along the bottom. The L2/R2 *outputs* are deliberately
+avoided — as axes, they're invisible to the PS3.
+
 ### Everything else
 
-The Duo, Analogue 64, PS2, PS3 and Xbox Series X profiles are identity maps — the console
+The Duo, Analogue 64, PS2 and Xbox Series X profiles are identity maps — the console
 (or adapter) already puts the buttons where you expect. The Duo profile additionally
 disables the stick-click inputs (L3/R3) since the PC Engine has no use for them and a
 bumped stick shouldn't press ghost buttons.
