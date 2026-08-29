@@ -155,11 +155,12 @@ def active_map(blob):
 
 def map_summary(blob):
     """One-line summary: only the buttons that are remapped (not identity)."""
-    ident = {"A": "A", "B": "B", "X": "X", "Y": "Y", "L": "L1", "R": "R1",
-             "L2": "L2", "R2": "R2", "Select": "Select", "Start": "Start",
-             "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right",
-             "Home": "Home", "Share": "Menu", "L3": "-", "R3": "-"}
-    changes = [f"{p}->{f}" for p, f in active_map(blob) if ident.get(p) != f]
+    ident = {"A": {"A"}, "B": {"B"}, "X": {"X"}, "Y": {"Y"}, "L": {"L1"},
+             "R": {"R1"}, "L2": {"L2"}, "R2": {"R2"}, "Select": {"Select"},
+             "Start": {"Start"}, "Up": {"Up"}, "Down": {"Down"},
+             "Left": {"Left"}, "Right": {"Right"}, "Home": {"Home"},
+             "Share": {"Menu"}, "L3": {"L3", "-"}, "R3": {"R3", "-"}}
+    changes = [f"{p}->{f}" for p, f in active_map(blob) if f not in ident.get(p, set())]
     return ", ".join(changes) if changes else "identity"
 
 
@@ -172,6 +173,83 @@ def decode(blob):
         print(f"\nbutton map block {bi} @0x{base:03x} ({tag}, {state}):")
         for phys, fn in button_map(blob, base):
             print(f"    {phys:<7} -> {fn}")
+
+
+# ------------------------------------------------------------ ini compiler
+INI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "profiles")
+TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.bin")
+
+# ini [Mappings] key -> button-map entry index (physical order in the blob)
+INI_PHYS = {"A": 0, "B": 1, "X": 2, "Y": 3, "L": 4, "R": 5, "L2": 6, "R2": 7,
+            "L3": 8, "R3": 9, "SELECT": 10, "START": 11, "SHARE": 12,
+            "HOME": 13, "UP": 14, "DOWN": 15, "LEFT": 16, "RIGHT": 17}
+# ini output value -> function bit (empirically verified against GUI-synced dumps)
+INI_FUNC = {"START": 0, "L3": 1, "R3": 2, "SELECT": 3, "X": 4, "Y": 5,
+            "RIGHT": 6, "LEFT": 7, "DOWN": 8, "UP": 9, "L": 10, "R": 11,
+            "L1": 10, "R1": 11, "B": 12, "A": 13, "L2": 14, "R2": 15,
+            "TURBO": 16, "MENU": 16, "SWITCHHOME": 17, "HOME": 17}
+
+
+def parse_ini_mappings(path):
+    mappings, in_section = {}, False
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("["):
+                in_section = line.lower() == "[mappings]"
+                continue
+            if in_section and "=" in line:
+                k, v = line.split("=", 1)
+                mappings[k.strip().upper()] = v.strip().upper()
+    return mappings
+
+
+def compile_ini(path):
+    """Build a 564-byte config image from an Ultimate Software ini profile.
+
+    Patches the template's name and BOTH button-map blocks (XInput + DInput)
+    with the ini's [Mappings]; stick/trigger/rumble params stay at the
+    template's GUI-written defaults, which is what all our profiles use.
+    """
+    blob = bytearray(open(TEMPLATE, "rb").read())
+    mappings = parse_ini_mappings(path)
+    entries = [0] * 18
+    for key, val in mappings.items():
+        if key not in INI_PHYS:
+            continue
+        idx = INI_PHYS[key]
+        if val == "N":
+            entries[idx] = 0
+        elif val in INI_FUNC:
+            entries[idx] = 1 << INI_FUNC[val]
+        else:
+            raise ValueError(f"{os.path.basename(path)}: unknown output {val!r} for {key}")
+    for base in BUTTONMAP_OFFSETS:
+        blob[base:base + 4] = ENABLE_FLAG.to_bytes(4, "little")
+        for i, v in enumerate(entries):
+            blob[base + 4 + 4 * i:base + 8 + 4 * i] = v.to_bytes(4, "little")
+    name = os.path.splitext(os.path.basename(path))[0][:16]
+    raw = name.encode("utf-16-le")
+    blob[0x11C:0x120] = ENABLE_FLAG.to_bytes(4, "little")
+    blob[0x120:0x140] = raw + b"\x00" * (32 - len(raw))
+    return bytes(blob)
+
+
+def list_inis():
+    if not os.path.isdir(INI_DIR):
+        return []
+    return sorted(fn[:-4] for fn in os.listdir(INI_DIR) if fn.lower().endswith(".ini"))
+
+
+def resolve_profile(name):
+    """Return (kind, blob) for a capture or ini profile; case-insensitive."""
+    for cap in list_captures():
+        if cap.lower() == name.lower():
+            return "capture", open(cap_path(cap), "rb").read()
+    for ini in list_inis():
+        if ini.lower() == name.lower():
+            return "ini", compile_ini(os.path.join(INI_DIR, ini + ".ini"))
+    return None, None
 
 
 # ---------------------------------------------------------------- captures
@@ -213,15 +291,18 @@ def list_captures():
     return sorted(fn[:-4] for fn in os.listdir(CAP_DIR) if fn.endswith(".bin"))
 
 
+def same_config(a, b):
+    """Equality ignoring the 4-byte header (device recomputes its CRC there)."""
+    return a[4:] == b[4:]
+
+
 def find_matching_capture(blob):
-    digest = hashlib.sha256(blob).hexdigest()
     for name in list_captures():
-        m = load_meta(name)
-        if m.get("sha256") == digest:
-            return name
-        if not m:  # no metadata: compare bytes directly
-            if open(cap_path(name), "rb").read() == blob:
+        try:
+            if same_config(open(cap_path(name), "rb").read(), blob):
                 return name
+        except OSError:
+            pass
     return None
 
 
@@ -240,50 +321,84 @@ def cmd_capture(args):
 
 
 def cmd_list(args):
-    names = list_captures()
-    if not names:
-        print("No captures yet. Sync a profile in the Ultimate Software,\n"
-              "then run:  stick capture <name>")
-        return
-    print(f"{'name':<12} {'profile':<16} mapping")
-    print("-" * 60)
-    for name in names:
+    caps = list_captures()
+    inis = list_inis()
+    print(f"{'name':<22} {'source':<9} mapping")
+    print("-" * 78)
+    for name in caps:
         m = load_meta(name)
-        print(f"{name:<12} {str(m.get('config_name','?')):<16} {m.get('map','?')}")
+        print(f"{name:<22} {'capture':<9} {m.get('map','?')}")
+    for name in inis:
+        try:
+            summary = map_summary(compile_ini(os.path.join(INI_DIR, name + ".ini")))
+        except ValueError as e:
+            summary = f"(compile error: {e})"
+        print(f"{name:<22} {'ini':<9} {summary}")
+    if not caps and not inis:
+        print("(nothing found - add ini files to profiles/ or run 'stick capture <name>')")
 
 
 def cmd_switch(args):
     if not args:
         raise SystemExit("usage: stick switch <name>   (see 'stick list')")
-    name = args[0]
-    if not os.path.exists(cap_path(name)):
-        avail = ", ".join(list_captures()) or "(none)"
-        raise SystemExit(f"no capture named '{name}'. Available: {avail}")
-    blob = open(cap_path(name), "rb").read()
+    name = " ".join(a for a in args if not a.startswith("--"))
+    kind, blob = resolve_profile(name)
+    if blob is None:
+        avail = ", ".join(list_captures() + list_inis()) or "(none)"
+        raise SystemExit(f"no profile named '{name}'. Available: {avail}")
     h = open_stick()
     current = read_config(h)
-    if current == blob:
+    if same_config(current, blob):
         print(f"'{name}' is already loaded on the stick. Nothing to do.")
         return
-    print(f"switching to '{name}' ({profile_name(blob)!r})...")
+    print(f"switching to '{name}' ({kind}, {profile_name(blob)!r})...")
     write_config(h, blob)
     back = read_config(h)
-    if back == blob:
+    if same_config(back, blob):
         print(f"done. active mapping: {map_summary(blob)}")
     else:
         diff = sum(a != b for a, b in zip(back, blob))
         print(f"WARNING: read-back differs in {diff} bytes; re-sync in the app if the stick misbehaves.")
 
 
+def identify(blob):
+    """Name of the capture or ini profile this blob matches, else None."""
+    match = find_matching_capture(blob)
+    if match:
+        return match
+    for ini in list_inis():
+        try:
+            if same_config(compile_ini(os.path.join(INI_DIR, ini + ".ini")), blob):
+                return ini
+        except ValueError:
+            pass
+    return None
+
+
 def cmd_current(args):
     h = open_stick()
     blob = read_config(h)
-    match = find_matching_capture(blob)
+    match = identify(blob)
     print(f"on stick: {profile_name(blob)!r}   mapping: {map_summary(blob)}")
     if match:
-        print(f"matches captured profile: '{match}'")
+        print(f"matches profile: '{match}'")
     else:
-        print("does not match any capture (run 'stick capture <name>' to save it)")
+        print("does not match any known profile (run 'stick capture <name>' to save it)")
+
+
+def cmd_compile(args):
+    if not args:
+        raise SystemExit("usage: stick compile <ini-name> [out.bin]")
+    name = args[0]
+    path = os.path.join(INI_DIR, name + ".ini")
+    if not os.path.exists(path):
+        raise SystemExit(f"no ini profile {name!r} in profiles/")
+    blob = compile_ini(path)
+    if len(args) > 1:
+        with open(args[1], "wb") as f:
+            f.write(blob)
+        print(f"wrote {args[1]}")
+    decode(blob)
 
 
 def cmd_read(args):
@@ -324,7 +439,7 @@ def cmd_roundtrip(args):
 COMMANDS = {
     "capture": cmd_capture, "list": cmd_list, "switch": cmd_switch,
     "current": cmd_current, "read": cmd_read, "decode": cmd_decode,
-    "apply": cmd_apply, "roundtrip": cmd_roundtrip,
+    "apply": cmd_apply, "roundtrip": cmd_roundtrip, "compile": cmd_compile,
 }
 
 

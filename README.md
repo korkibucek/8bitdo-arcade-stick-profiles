@@ -142,11 +142,15 @@ a command-line tool that reads and writes the stick's mapping directly over USB 
 Keep a library of captured profiles and switch between them in about a second:
 
 ```bash
-stick capture ps3 "PlayStation 3"   # snapshot what's synced now (once per console)
-stick list                          # see your library
-stick switch ps3                    # load it onto the stick, no GUI
+stick list                          # every profile in this repo, with mappings
+stick switch "Pocket SNES"          # compile the ini and load it, ~1 second
 stick current                       # what's loaded right now?
+stick-tray.cmd                      # tray icon + Ctrl+Alt+1..0 global hotkeys
 ```
+
+All the ini profiles in [`profiles/`](profiles/) are available by name — they're
+compiled straight to the stick's native config format, no Ultimate Software sync
+needed. There's also a system-tray app with global hotkeys (`stick-tray.cmd`).
 
 Every write is read-back-verified, and a bad write is recoverable by re-syncing any
 profile in the official app. The protocol (reverse-engineered from `8BitDoAdvance.dll`
