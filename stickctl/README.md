@@ -27,6 +27,15 @@ use the `stick` wrapper instead of `py stickctl\stickctl.py`:
 stick <command> ...
 ```
 
+## Requires "config mode"
+
+stickctl reaches the stick through a USB interface (`2dc8:901a`) that only exists
+while the stick is in **8BitDo config mode** — the mode the Ultimate Software puts it
+in. With the app closed, the stick is a plain Xbox-360 pad and the interface is gone,
+so `switch` will say *"needs config mode"*. Launch the Ultimate Software once (it can
+stay minimized) and it works again. Full explanation and the app-free-operation plan:
+[../docs/config-mode.md](../docs/config-mode.md). Check state with `stick state`.
+
 ## The tray app
 
 ```bash

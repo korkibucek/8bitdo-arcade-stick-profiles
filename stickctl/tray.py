@@ -58,8 +58,11 @@ class TrayApp:
             blob = ctl.read_config(h)
             self.current = ctl.identify(blob)
             self.status = f"on stick: {ctl.profile_name(blob) or self.current or 'unknown'}"
-        except SystemExit as e:
-            self.current, self.status = None, "stick not connected"
+        except ctl.StickNotInConfigMode:
+            state = ctl.stick_state()
+            self.current = None
+            self.status = ("needs config mode - open Ultimate Software"
+                           if state in ("xbox", "switch") else "stick not connected")
         except Exception as e:
             self.current, self.status = None, f"error: {e}"
 
@@ -73,8 +76,13 @@ class TrayApp:
                 return
             try:
                 h = ctl.open_stick()
-            except SystemExit:
-                self.notify("stick not connected (USB, mode switch on X)")
+            except ctl.StickNotInConfigMode:
+                state = ctl.stick_state()
+                if state in ("xbox", "switch"):
+                    self.notify("Stick needs config mode. Open the 8BitDo Ultimate "
+                                "Software once (it can stay minimized), then try again.")
+                else:
+                    self.notify("Stick not connected. Plug in via USB.")
                 return
             try:
                 if ctl.same_config(ctl.read_config(h), blob):

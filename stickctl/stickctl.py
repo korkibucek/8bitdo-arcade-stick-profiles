@@ -52,16 +52,44 @@ BUTTONMAP_OFFSETS = (0xD0, 0x1E8)   # block A (XInput), block B (DInput)
 
 
 # ---------------------------------------------------------------- transport
+class StickNotInConfigMode(SystemExit):
+    pass
+
+
+def stick_state():
+    """Return 'config' (2dc8:901a present), 'xbox' (X-input gaming mode),
+    'switch' (Switch gaming mode), or 'absent'."""
+    if hid.enumerate(VID, PID):
+        return "config"
+    if hid.enumerate(0x045E, 0x028E):
+        return "xbox"
+    if hid.enumerate(0x057E, 0) or hid.enumerate(0x2DC8, 0x9018):
+        return "switch"
+    return "absent"
+
+
 def open_stick():
     devs = hid.enumerate(VID, PID)
-    if not devs:
-        raise SystemExit(
-            "Arcade Stick (2dc8:901a) not found.\n"
-            "Plug it in by USB cable with the mode switch on X, then retry.")
-    h = hid.device()
-    h.open_path(devs[0]["path"])
-    h.set_nonblocking(False)
-    return h
+    if devs:
+        h = hid.device()
+        h.open_path(devs[0]["path"])
+        h.set_nonblocking(False)
+        return h
+    state = stick_state()
+    if state == "xbox":
+        raise StickNotInConfigMode(
+            "The stick is connected but in Xbox gaming mode, not config mode.\n"
+            "stickctl can only reach it while it's in 8BitDo config mode, which the\n"
+            "Ultimate Software puts it into. Fix: launch the 8BitDo Ultimate Software\n"
+            "(it can stay minimized) - the stick will re-appear as 2dc8:901a and\n"
+            "stickctl/tray will work. See docs/config-mode.md for why.")
+    if state == "switch":
+        raise StickNotInConfigMode(
+            "The stick is in Switch gaming mode. Set the mode switch to X and open\n"
+            "the 8BitDo Ultimate Software once so it enters config mode.")
+    raise StickNotInConfigMode(
+        "Arcade Stick not found. Plug it in by USB cable, and open the 8BitDo\n"
+        "Ultimate Software once so it enters config mode (see docs/config-mode.md).")
 
 
 def _frame(cmd, offset, size, data=b""):
@@ -375,6 +403,17 @@ def identify(blob):
     return None
 
 
+def cmd_state(args):
+    s = stick_state()
+    msg = {
+        "config": "config mode (2dc8:901a) - ready. stickctl can read/write.",
+        "xbox": "Xbox gaming mode (045e:028e) - NOT reachable. Open Ultimate Software to enter config mode.",
+        "switch": "Switch gaming mode - NOT reachable. Set switch to X + open Ultimate Software.",
+        "absent": "not detected. Plug in by USB.",
+    }[s]
+    print(f"stick state: {msg}")
+
+
 def cmd_current(args):
     h = open_stick()
     blob = read_config(h)
@@ -440,6 +479,7 @@ COMMANDS = {
     "capture": cmd_capture, "list": cmd_list, "switch": cmd_switch,
     "current": cmd_current, "read": cmd_read, "decode": cmd_decode,
     "apply": cmd_apply, "roundtrip": cmd_roundtrip, "compile": cmd_compile,
+    "state": cmd_state,
 }
 
 
