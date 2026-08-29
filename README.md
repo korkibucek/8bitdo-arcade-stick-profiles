@@ -108,3 +108,7 @@ The `.ini` files are human-readable too — `[Mappings]` is simply `physical=out
 The ★ button next to Home is the hardware Turbo control in all profiles: hold ★ and tap a
 button to toggle turbo on it; hold ★ and tap it again to clear. Handy for shmups on the
 Genesis and Neo-Geo cores.
+
+## License
+
+[MIT](LICENSE) — use, copy, and adapt these profiles freely.
