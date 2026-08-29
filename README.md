@@ -24,7 +24,7 @@ the ★ button stays mapped to **Turbo**, and Home stays as the mode/home button
 | `Analogue Duo.ini` | Analogue Duo | Identity, stick-click (L3/R3) disabled; A/B act as II/I |
 | `Analogue 64.ini` | Analogue 64 | Identity — flip the lever switch to left-analog for the N64 stick |
 | `PS2.ini` | PlayStation 2 (via adapter) | Identity — A B X Y → Cross Circle Square Triangle |
-| `PS3.ini` | PlayStation 3 (Bluetooth) | Remapped for the PS3's index-based HID reading — see below |
+| `PS3.ini` | PlayStation 3 (Bluetooth) | Remapped for the PS3's index-based HID reading — [full technical write-up](docs/ps3-bluetooth-mapping.md) |
 | `Xbox Series X.ini` | Xbox Series X (via adapter) | Identity — native Xbox layout |
 | `Steam.ini`, `MAME.ini`, `PCE.ini` | PC | Original PC profiles, included for completeness |
 
@@ -105,6 +105,10 @@ to land on the right indices:
 That gives the classic PS3 fight-game default: LP·MP·HP on Square·Triangle·R1 across the
 top, LK·MK·HK on Cross·Circle·R2 along the bottom. The L2/R2 *outputs* are deliberately
 avoided — as axes, they're invisible to the PS3.
+
+For the complete derivation — both index tables, the before/after behavior, and an
+annotated walkthrough of every `[Mappings]` line — see the
+**[PS3 Bluetooth mapping deep-dive](docs/ps3-bluetooth-mapping.md)**.
 
 ### Everything else
 
