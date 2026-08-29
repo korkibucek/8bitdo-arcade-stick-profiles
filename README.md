@@ -135,6 +135,14 @@ The ★ button next to Home is the hardware Turbo control in all profiles: hold 
 button to toggle turbo on it; hold ★ and tap it again to clear. Handy for shmups on the
 Genesis and Neo-Geo cores.
 
+## stickctl (experimental)
+
+[`stickctl/`](stickctl/) is a command-line tool that talks the stick's config protocol
+directly over USB HID — read, decode and capture the on-stick mapping without the
+Ultimate Software GUI, as the groundwork for a fast one-command profile switcher. The
+protocol (reverse-engineered from `8BitDoAdvance.dll`) is documented in
+[docs/protocol.md](docs/protocol.md).
+
 ## License
 
 [MIT](LICENSE) — use, copy, and adapt these profiles freely.
