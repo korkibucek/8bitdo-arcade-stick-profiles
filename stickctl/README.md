@@ -9,9 +9,10 @@ fast profile switcher (see the [protocol write-up](../docs/protocol.md)).
 - ✅ **Read** the live 564-byte config off the stick
 - ✅ **Decode** it (gamepad mode, profile name, full button map for both blocks)
 - ✅ **Capture** the current config to a named file
-- ⚠️ **Apply** (write a captured config back) — implemented and guarded behind
-  `--yes-write`; round-trips are read-back-verified. Validated protocol, but treat
-  the first writes on your own stick as experimental.
+- ✅ **Write + commit** — proven on hardware via the `roundtrip` self-test
+  (writes the current config back byte-for-byte and verifies). The `apply` command
+  (write a *different* captured profile) is guarded behind `--yes-write` and always
+  read-back-verifies.
 
 ## Setup
 

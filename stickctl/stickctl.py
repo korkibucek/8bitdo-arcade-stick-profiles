@@ -204,9 +204,41 @@ def cmd_apply(args):
         print(f"WARNING: read-back differs in {diff} bytes (some fields may be device-normalized).")
 
 
+def cmd_roundtrip(args):
+    """Read current config, write the SAME bytes back, commit, verify. No net change."""
+    if "--yes-write" not in args:
+        raise SystemExit(
+            "This performs a real write+commit (of the identical current config).\n"
+            "Re-run with:  py stickctl.py roundtrip --yes-write")
+    h = open_stick()
+    print("reading current config...")
+    before = read_config(h)
+    print(f"  {len(before)} bytes, name={decode_name(before)!r}")
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "roundtrip_backup.bin"), "wb") as f:
+        f.write(before)
+    print("wrote local safety backup: roundtrip_backup.bin")
+    print("writing the same bytes back + commit...")
+    write_config(h, before)
+    print("reading back to verify...")
+    after = read_config(h)
+    if after == before:
+        print("\nPASS: full write+commit cycle works and config is byte-identical.")
+    else:
+        diff = [(i, before[i], after[i]) for i in range(len(before)) if before[i] != after[i]]
+        print(f"\nDIFF in {len(diff)} bytes (first few): {diff[:8]}")
+        print("Config still valid (we wrote back what was there); investigate before real applies.")
+
+
+def decode_name(blob):
+    try:
+        return blob[0x120:0x140].decode("utf-16-le").rstrip("\x00￿")
+    except UnicodeDecodeError:
+        return blob[0x120:0x140].hex()
+
+
 COMMANDS = {
     "read": cmd_read, "decode": cmd_decode, "capture": cmd_capture,
-    "list": cmd_list, "apply": cmd_apply,
+    "list": cmd_list, "apply": cmd_apply, "roundtrip": cmd_roundtrip,
 }
 
 

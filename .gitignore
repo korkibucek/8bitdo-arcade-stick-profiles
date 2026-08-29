@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 stickctl/config_dump.bin
+stickctl/roundtrip_backup.bin
