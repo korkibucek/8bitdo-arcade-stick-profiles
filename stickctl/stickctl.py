@@ -2,22 +2,28 @@
 """stickctl - fast profile control for the 8BitDo Arcade Stick (PID 0x901a).
 
 Talks the Ultimate-Software HID config protocol directly, so profiles can be
-dumped, inspected, captured and (with an explicit flag) applied without the
-official GUI. Protocol reverse-engineered from 8BitDoAdvance.dll + the
-TheJayMann/8bitdo-spec Pro2 family notes; see docs/protocol.md.
+dumped, inspected, captured and applied without the official GUI. Protocol
+reverse-engineered from 8BitDoAdvance.dll + TheJayMann/8bitdo-spec; see
+docs/protocol.md.
 
-SAFE commands (read-only): read, decode, capture, list
-GUARDED command (writes to the device): apply  -- requires --yes-write
+Everyday workflow:
+    stick capture <name>     snapshot the profile currently on the stick
+    stick list               show your captured profiles + what they map
+    stick switch <name>      load a captured profile onto the stick (~1s)
+    stick current            show what's on the stick right now
 
-    py stickctl.py read [out.bin]
-    py stickctl.py decode [dump.bin]
-    py stickctl.py capture <name>          # dump live config to captures/<name>.bin
-    py stickctl.py list
-    py stickctl.py apply <name> --yes-write # write captures/<name>.bin to the stick
+Lower level:
+    stick read [out.bin]     read+decode live config to a file
+    stick decode [file.bin]  decode a saved dump (offline)
+    stick apply <name> --yes-write   scriptable switch (explicit write flag)
+
+Setup:  py -m pip install hidapi ; connect by USB, mode switch on X.
 """
+import datetime
+import hashlib
+import json
 import os
 import sys
-import time
 
 import hid
 
@@ -28,12 +34,11 @@ CMD_READ = 0x0C
 CMD_WRITE = 0x0B
 CMD_COMMIT = 0x06
 SUBCMD_COMMIT = 0x15
-CHANNEL = 0x04               # request header[2] / response[2]
-ENABLE_FLAG = 0x20191212     # little-endian bytes 12 12 19 20
+CHANNEL = 0x04
+ENABLE_FLAG = 0x20191212
 
 CAP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "captures")
 
-# Button-map section: 18 physical inputs, one u32 function bitset each.
 PHYSICAL = ["A", "B", "X", "Y", "L", "R", "L2", "R2", "L3", "R3",
             "Select", "Start", "Share", "Home", "Up", "Down", "Left", "Right"]
 FUNCTION = {
@@ -43,14 +48,16 @@ FUNCTION = {
     22: "Screenshot", 23: "Turbo", 24: "Turbo Auto", 25: "P1", 26: "P2",
     27: "Dyn swap",
 }
-# The two 280-byte config blocks each carry a 76-byte button-map section.
-BUTTONMAP_OFFSETS = (0xD0, 0x1E8)
+BUTTONMAP_OFFSETS = (0xD0, 0x1E8)   # block A (XInput), block B (DInput)
 
 
+# ---------------------------------------------------------------- transport
 def open_stick():
     devs = hid.enumerate(VID, PID)
     if not devs:
-        raise SystemExit("Arcade Stick (2dc8:901a) not found. Plug it in via USB, mode switch on X.")
+        raise SystemExit(
+            "Arcade Stick (2dc8:901a) not found.\n"
+            "Plug it in by USB cable with the mode switch on X, then retry.")
     h = hid.device()
     h.open_path(devs[0]["path"])
     h.set_nonblocking(False)
@@ -108,7 +115,6 @@ def write_config(h, blob):
         if r is None:
             raise IOError(f"write: no ack at offset {offset}")
         offset += r[10] if r[10] else size
-    # commit
     commit = bytearray(16)
     commit[0] = CMD_COMMIT
     commit[2] = SUBCMD_COMMIT
@@ -118,31 +124,166 @@ def write_config(h, blob):
         raise IOError("write: commit not acknowledged")
 
 
-def decode(blob):
-    def u32(o):
-        return int.from_bytes(blob[o:o + 4], "little")
+# ------------------------------------------------------------------ decode
+def _u32(blob, o):
+    return int.from_bytes(blob[o:o + 4], "little")
 
-    print(f"config: {len(blob)} bytes  header={blob[:4].hex(' ')}")
+
+def profile_name(blob):
+    try:
+        return blob[0x120:0x140].decode("utf-16-le").rstrip("\x00�")
+    except UnicodeDecodeError:
+        return blob[0x120:0x140].hex()
+
+
+def button_map(blob, base):
+    out = []
+    for i, phys in enumerate(PHYSICAL):
+        val = _u32(blob, base + 4 + 4 * i)
+        if val == 0:
+            out.append((phys, "-"))
+        else:
+            bit = val.bit_length() - 1
+            out.append((phys, FUNCTION.get(bit, f"bit{bit}")))
+    return out
+
+
+def active_map(blob):
+    """The DInput block is the one that drives Bluetooth/adapter play."""
+    return button_map(blob, BUTTONMAP_OFFSETS[1])
+
+
+def map_summary(blob):
+    """One-line summary: only the buttons that are remapped (not identity)."""
+    ident = {"A": "A", "B": "B", "X": "X", "Y": "Y", "L": "L1", "R": "R1",
+             "L2": "L2", "R2": "R2", "Select": "Select", "Start": "Start",
+             "Up": "Up", "Down": "Down", "Left": "Left", "Right": "Right",
+             "Home": "Home", "Share": "Menu", "L3": "-", "R3": "-"}
+    changes = [f"{p}->{f}" for p, f in active_map(blob) if ident.get(p) != f]
+    return ", ".join(changes) if changes else "identity"
+
+
+def decode(blob):
+    print(f"config: {len(blob)} bytes   name={profile_name(blob)!r}")
     for bi, base in enumerate(BUTTONMAP_OFFSETS):
-        flag = u32(base)
+        flag = _u32(blob, base)
         tag = "active/DInput" if bi == 1 else "stored/XInput"
         state = "enabled" if flag == ENABLE_FLAG else f"flag={flag:08x}"
         print(f"\nbutton map block {bi} @0x{base:03x} ({tag}, {state}):")
-        for i, phys in enumerate(PHYSICAL):
-            val = u32(base + 4 + 4 * i)
-            if val == 0:
-                fn = "-"
-            else:
-                bit = val.bit_length() - 1
-                fn = FUNCTION.get(bit, f"bit{bit}")
+        for phys, fn in button_map(blob, base):
             print(f"    {phys:<7} -> {fn}")
-    # profile name lives just after the block-2 name enable flag (0x11c)
-    name = blob[0x120:0x140]
+
+
+# ---------------------------------------------------------------- captures
+def cap_path(name):
+    return os.path.join(CAP_DIR, name + ".bin")
+
+
+def meta_path(name):
+    return os.path.join(CAP_DIR, name + ".json")
+
+
+def save_capture(name, blob, label=None):
+    os.makedirs(CAP_DIR, exist_ok=True)
+    with open(cap_path(name), "wb") as f:
+        f.write(blob)
+    meta = {
+        "label": label or name,
+        "config_name": profile_name(blob),
+        "map": map_summary(blob),
+        "captured_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+    }
+    with open(meta_path(name), "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+    return meta
+
+
+def load_meta(name):
     try:
-        txt = name.decode("utf-16-le").rstrip("\x00￿")
-    except UnicodeDecodeError:
-        txt = name.hex()
-    print(f"\nprofile name: {txt!r}")
+        with open(meta_path(name), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def list_captures():
+    if not os.path.isdir(CAP_DIR):
+        return []
+    return sorted(fn[:-4] for fn in os.listdir(CAP_DIR) if fn.endswith(".bin"))
+
+
+def find_matching_capture(blob):
+    digest = hashlib.sha256(blob).hexdigest()
+    for name in list_captures():
+        m = load_meta(name)
+        if m.get("sha256") == digest:
+            return name
+        if not m:  # no metadata: compare bytes directly
+            if open(cap_path(name), "rb").read() == blob:
+                return name
+    return None
+
+
+# ------------------------------------------------------------------ commands
+def cmd_capture(args):
+    if not args:
+        raise SystemExit("usage: stick capture <name>   (name the console, e.g. ps3)")
+    name = args[0]
+    label = " ".join(args[1:]) if len(args) > 1 else None
+    h = open_stick()
+    blob = read_config(h)
+    meta = save_capture(name, blob, label)
+    print(f"captured '{name}' <- profile {meta['config_name']!r}")
+    print(f"  mapping: {meta['map']}")
+    print(f"  saved:   {os.path.normpath(cap_path(name))}")
+
+
+def cmd_list(args):
+    names = list_captures()
+    if not names:
+        print("No captures yet. Sync a profile in the Ultimate Software,\n"
+              "then run:  stick capture <name>")
+        return
+    print(f"{'name':<12} {'profile':<16} mapping")
+    print("-" * 60)
+    for name in names:
+        m = load_meta(name)
+        print(f"{name:<12} {str(m.get('config_name','?')):<16} {m.get('map','?')}")
+
+
+def cmd_switch(args):
+    if not args:
+        raise SystemExit("usage: stick switch <name>   (see 'stick list')")
+    name = args[0]
+    if not os.path.exists(cap_path(name)):
+        avail = ", ".join(list_captures()) or "(none)"
+        raise SystemExit(f"no capture named '{name}'. Available: {avail}")
+    blob = open(cap_path(name), "rb").read()
+    h = open_stick()
+    current = read_config(h)
+    if current == blob:
+        print(f"'{name}' is already loaded on the stick. Nothing to do.")
+        return
+    print(f"switching to '{name}' ({profile_name(blob)!r})...")
+    write_config(h, blob)
+    back = read_config(h)
+    if back == blob:
+        print(f"done. active mapping: {map_summary(blob)}")
+    else:
+        diff = sum(a != b for a, b in zip(back, blob))
+        print(f"WARNING: read-back differs in {diff} bytes; re-sync in the app if the stick misbehaves.")
+
+
+def cmd_current(args):
+    h = open_stick()
+    blob = read_config(h)
+    match = find_matching_capture(blob)
+    print(f"on stick: {profile_name(blob)!r}   mapping: {map_summary(blob)}")
+    if match:
+        print(f"matches captured profile: '{match}'")
+    else:
+        print("does not match any capture (run 'stick capture <name>' to save it)")
 
 
 def cmd_read(args):
@@ -160,85 +301,30 @@ def cmd_decode(args):
     decode(open(path, "rb").read())
 
 
-def cmd_capture(args):
-    if not args:
-        raise SystemExit("usage: capture <name>")
-    os.makedirs(CAP_DIR, exist_ok=True)
-    h = open_stick()
-    blob = read_config(h)
-    path = os.path.join(CAP_DIR, args[0] + ".bin")
-    with open(path, "wb") as f:
-        f.write(blob)
-    print(f"captured live config -> {os.path.normpath(path)}")
-    decode(blob)
-
-
-def cmd_list(args):
-    if not os.path.isdir(CAP_DIR):
-        print("no captures yet")
-        return
-    for fn in sorted(os.listdir(CAP_DIR)):
-        if fn.endswith(".bin"):
-            print(" ", fn[:-4])
-
-
 def cmd_apply(args):
     if not args:
-        raise SystemExit("usage: apply <name> --yes-write")
+        raise SystemExit("usage: stick apply <name> --yes-write")
     name = args[0]
     if "--yes-write" not in args:
-        raise SystemExit(
-            f"REFUSING to write: this changes the stick's stored mapping.\n"
-            f"Re-run with:  py stickctl.py apply {name} --yes-write")
-    path = os.path.join(CAP_DIR, name + ".bin")
-    blob = open(path, "rb").read()
-    h = open_stick()
-    print(f"writing {name} ({len(blob)} bytes) to the stick...")
-    write_config(h, blob)
-    print("write + commit ok; verifying...")
-    back = read_config(h)
-    if back == blob:
-        print("VERIFIED: device config matches the applied profile.")
-    else:
-        diff = sum(a != b for a, b in zip(back, blob))
-        print(f"WARNING: read-back differs in {diff} bytes (some fields may be device-normalized).")
+        raise SystemExit(f"writes flash; re-run:  stick apply {name} --yes-write")
+    cmd_switch([name])
 
 
 def cmd_roundtrip(args):
-    """Read current config, write the SAME bytes back, commit, verify. No net change."""
     if "--yes-write" not in args:
-        raise SystemExit(
-            "This performs a real write+commit (of the identical current config).\n"
-            "Re-run with:  py stickctl.py roundtrip --yes-write")
+        raise SystemExit("writes the identical current config back; re-run: stick roundtrip --yes-write")
     h = open_stick()
-    print("reading current config...")
     before = read_config(h)
-    print(f"  {len(before)} bytes, name={decode_name(before)!r}")
-    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "roundtrip_backup.bin"), "wb") as f:
-        f.write(before)
-    print("wrote local safety backup: roundtrip_backup.bin")
-    print("writing the same bytes back + commit...")
+    print(f"read {len(before)} bytes, name={profile_name(before)!r}")
     write_config(h, before)
-    print("reading back to verify...")
     after = read_config(h)
-    if after == before:
-        print("\nPASS: full write+commit cycle works and config is byte-identical.")
-    else:
-        diff = [(i, before[i], after[i]) for i in range(len(before)) if before[i] != after[i]]
-        print(f"\nDIFF in {len(diff)} bytes (first few): {diff[:8]}")
-        print("Config still valid (we wrote back what was there); investigate before real applies.")
-
-
-def decode_name(blob):
-    try:
-        return blob[0x120:0x140].decode("utf-16-le").rstrip("\x00￿")
-    except UnicodeDecodeError:
-        return blob[0x120:0x140].hex()
+    print("PASS: byte-identical" if after == before else "DIFF: investigate")
 
 
 COMMANDS = {
-    "read": cmd_read, "decode": cmd_decode, "capture": cmd_capture,
-    "list": cmd_list, "apply": cmd_apply, "roundtrip": cmd_roundtrip,
+    "capture": cmd_capture, "list": cmd_list, "switch": cmd_switch,
+    "current": cmd_current, "read": cmd_read, "decode": cmd_decode,
+    "apply": cmd_apply, "roundtrip": cmd_roundtrip,
 }
 
 

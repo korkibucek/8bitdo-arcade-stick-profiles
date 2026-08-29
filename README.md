@@ -135,13 +135,23 @@ The ★ button next to Home is the hardware Turbo control in all profiles: hold 
 button to toggle turbo on it; hold ★ and tap it again to clear. Handy for shmups on the
 Genesis and Neo-Geo cores.
 
-## stickctl (experimental)
+## stickctl — GUI-free profile switching
 
-[`stickctl/`](stickctl/) is a command-line tool that talks the stick's config protocol
-directly over USB HID — read, decode and capture the on-stick mapping without the
-Ultimate Software GUI, as the groundwork for a fast one-command profile switcher. The
-protocol (reverse-engineered from `8BitDoAdvance.dll`) is documented in
-[docs/protocol.md](docs/protocol.md).
+Tired of opening the Ultimate Software to change profiles? [`stickctl/`](stickctl/) is
+a command-line tool that reads and writes the stick's mapping directly over USB HID.
+Keep a library of captured profiles and switch between them in about a second:
+
+```bash
+stick capture ps3 "PlayStation 3"   # snapshot what's synced now (once per console)
+stick list                          # see your library
+stick switch ps3                    # load it onto the stick, no GUI
+stick current                       # what's loaded right now?
+```
+
+Every write is read-back-verified, and a bad write is recoverable by re-syncing any
+profile in the official app. The protocol (reverse-engineered from `8BitDoAdvance.dll`
+and verified against hardware) is documented in [docs/protocol.md](docs/protocol.md);
+usage details are in the [stickctl README](stickctl/README.md).
 
 ## License
 

@@ -1,0 +1,7 @@
+{
+  "label": "PlayStation 3 (Bluetooth)",
+  "config_name": "PS3 (1)",
+  "map": "A->B, B->X, X->A, L2->Select, R2->Start, L3->L3, R3->R3, Select->L3, Start->R3",
+  "captured_at": "2026-08-29T16:25:52",
+  "sha256": "18f21b67e7b226c8171febe9f4ac22e5ce74dfc03f5680a40d0d231f078d1919"
+}
