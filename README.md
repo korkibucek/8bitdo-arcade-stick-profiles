@@ -19,7 +19,7 @@ the ★ button stays mapped to **Turbo**, and Home stays as the mode/home button
 | `Pocket SNES.ini` | Analogue Pocket — SNES core | Face remapped to the classic SNES arcade layout (Y X L / B A R) |
 | `Pocket NES.ini` | Analogue Pocket — NES core | A/B swapped so B sits left of A, like a NES pad |
 | `Pocket Genesis.ini` | Analogue Pocket — Genesis core | Identity — rows fall onto X Y Z / A B C |
-| `Pocket Neo-Geo.ini` | Analogue Pocket — Neo-Geo (Jotego core) | Identity — left 2×2 block gives A B / C D |
+| `Pocket Neo-Geo.ini` | Analogue Pocket — Neo-Geo (Jotego core) | Bottom row = A B C D, like a real cabinet |
 | `Pocket Master System.ini` | Analogue Pocket — Master System core | Identity — buttons 1 & 2 on the bottom row |
 | `Analogue Duo.ini` | Analogue Duo | Identity, stick-click (L3/R3) disabled; A/B act as II/I |
 | `Analogue 64.ini` | Analogue 64 | Identity — flip the lever switch to left-analog for the N64 stick |
@@ -79,8 +79,10 @@ core binds them: top row X·Y·Z, bottom row A·B·C.
 
 ### Pocket Neo-Geo (Jotego)
 
-The Jotego cores bind A/B/X/Y to Neo-Geo A/B/C/D, so the left 2×2 block becomes the
-classic grid: A·B on the bottom, C·D on top.
+A real Neo-Geo cabinet has its four buttons — A B C D — in a single horizontal row, so
+this profile lays them along the **bottom row** of the stick: A, B, C, D left to right
+(physical A, B, R2, L2, which the Jotego core reads as Neo A/B/C/D). The top face row is
+disabled, so only the bottom row is live — just like the arcade.
 
 ![Neo-Geo layout](docs/images/layout-neogeo.svg)
 
